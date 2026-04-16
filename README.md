@@ -1,5 +1,9 @@
 # CyberGuard Professional Security Toolkit
 
+[![CI](https://github.com/Evil-Null/cyberguard/actions/workflows/ci.yml/badge.svg)](https://github.com/Evil-Null/cyberguard/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 Enterprise-grade cybersecurity assessment platform for Linux infrastructure. Unified CLI interface covering the full security lifecycle — from reconnaissance to compliance reporting.
 
 ## Architecture
