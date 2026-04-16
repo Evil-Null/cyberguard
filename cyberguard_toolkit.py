@@ -29,6 +29,8 @@ import sys
 import tarfile
 import threading
 import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from pathlib import Path
@@ -636,6 +638,7 @@ class ThreatIntelAPI:
         self.config = config
         self._last_request: Dict[str, float] = {}
         self._cache: Dict[str, Tuple[float, Any]] = {}
+        self._cache_maxsize: int = 256
 
     def _rate_limit(self, service: str, delay: float = 1.0):
         last = self._last_request.get(service, 0)
@@ -653,6 +656,9 @@ class ThreatIntelAPI:
         return None
 
     def _set_cache(self, key: str, data: Any):
+        if len(self._cache) >= self._cache_maxsize:
+            oldest_key = min(self._cache, key=lambda k: self._cache[k][0])
+            del self._cache[oldest_key]
         self._cache[key] = (time.time(), data)
 
     # ── VirusTotal ──
@@ -2486,37 +2492,46 @@ class CyberGuardToolkit:
             9200: "elasticsearch", 27017: "mongodb",
         }
 
+        MAX_SCAN_WORKERS = 100
+
+        def _scan_single_port(port: int) -> Optional[dict]:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(timeout_val)
+                rc = sock.connect_ex((target, port))
+                if rc == 0:
+                    service = common_services.get(port, "unknown")
+                    banner = ""
+                    try:
+                        sock.settimeout(2)
+                        sock.send(b"HEAD / HTTP/1.0\r\n\r\n")
+                        banner = sock.recv(256).decode("utf-8", errors="replace").strip()
+                    except Exception as e:
+                        self.config.logger.debug("Banner grab failed for %s:%s: %s", target, port, e)
+                    sock.close()
+                    return {"port": port, "state": "open", "service": service, "banner": banner}
+                sock.close()
+            except Exception as e:
+                self.config.logger.debug("Port scan connect failed for %s:%s: %s", target, port, e)
+            return None
+
+        workers = min(MAX_SCAN_WORKERS, len(ports))
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         ) as progress:
-            task = progress.add_task(f"Scanning {target}", total=len(ports))
-            for port in ports:
-                try:
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(timeout_val)
-                    rc = sock.connect_ex((target, port))
-                    if rc == 0:
-                        service = common_services.get(port, "unknown")
-                        banner = ""
-                        try:
-                            sock.settimeout(2)
-                            sock.send(b"HEAD / HTTP/1.0\r\n\r\n")
-                            banner = sock.recv(256).decode("utf-8", errors="replace").strip()
-                        except Exception as e:
-                            self.config.logger.debug("Banner grab failed for %s:%s: %s", target, port, e)
-                            pass
-                        results.append({
-                            "port": port, "state": "open",
-                            "service": service, "banner": banner,
-                        })
-                    sock.close()
-                except Exception as e:
-                    self.config.logger.debug("Port scan connect failed for %s:%s: %s", target, port, e)
-                    pass
-                progress.advance(task)
+            task = progress.add_task(f"Scanning {target} ({workers} threads)", total=len(ports))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {pool.submit(_scan_single_port, p): p for p in ports}
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result:
+                        results.append(result)
+                    progress.advance(task)
+
+        results.sort(key=lambda r: r["port"])
 
         UI.print_port_scan_results(target, results)
         self.config.save_session_history("port_scan", f"{target}: {len(results)} open ports")
@@ -2846,6 +2861,16 @@ class CyberGuardToolkit:
                 return f"{n:.1f} {unit}"
             n /= 1024
         return f"{n:.1f} PB"
+
+    @staticmethod
+    def _tail_file(path: Path, max_lines: int) -> List[str]:
+        """Read last max_lines from a file without loading entire file into memory."""
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            all_lines = text.splitlines()
+            return all_lines[-max_lines:] if len(all_lines) > max_lines else all_lines
+        except (OSError, PermissionError):
+            return []
 
     # ═══════════════════════════════════════════════════════════════════
     # CATEGORY 2: SYSTEM HARDENING
@@ -3915,7 +3940,7 @@ class CyberGuardToolkit:
             return
 
         try:
-            lines = log_path.read_text(errors="replace").splitlines()[-MAX_LOG_LINES:]
+            lines = self._tail_file(log_path, MAX_LOG_LINES)
         except PermissionError:
             UI.print_error(f"Permission denied: {log_path}")
             return
@@ -4098,7 +4123,7 @@ class CyberGuardToolkit:
             return
 
         try:
-            lines = auth_log.read_text(errors="replace").splitlines()[-MAX_LOG_LINES:]
+            lines = self._tail_file(auth_log, MAX_LOG_LINES)
         except PermissionError:
             UI.print_error("Cannot read auth.log (try sudo)")
             return
@@ -4196,7 +4221,7 @@ class CyberGuardToolkit:
         auth_log = Path("/var/log/auth.log")
         if auth_log.exists():
             try:
-                for line in auth_log.read_text(errors="replace").splitlines()[-2000:]:
+                for line in self._tail_file(auth_log, 2000):
                     ts_match = re.match(r"^(\w+\s+\d+\s+[\d:]+)", line)
                     if ts_match:
                         severity = "INFO"
@@ -4218,7 +4243,7 @@ class CyberGuardToolkit:
         syslog = Path("/var/log/syslog")
         if syslog.exists():
             try:
-                for line in syslog.read_text(errors="replace").splitlines()[-2000:]:
+                for line in self._tail_file(syslog, 2000):
                     if re.search(r"(error|warning|critical|alert)", line, re.IGNORECASE):
                         ts_match = re.match(r"^(\w+\s+\d+\s+[\d:]+)", line)
                         if ts_match:
@@ -4792,7 +4817,7 @@ class CyberGuardToolkit:
         auth_log = Path("/var/log/auth.log")
         if auth_log.exists():
             try:
-                for line in auth_log.read_text(errors="replace").splitlines()[-1000:]:
+                for line in self._tail_file(auth_log, 1000):
                     ts_match = re.match(r"^(\w+\s+\d+\s+[\d:]+)", line)
                     if ts_match and re.search(r"(session|login|sudo|su|failed|accepted)", line, re.IGNORECASE):
                         events.append({
@@ -4947,7 +4972,7 @@ class CyberGuardToolkit:
         auth_log = Path("/var/log/auth.log")
         if auth_log.exists():
             try:
-                for line in auth_log.read_text(errors="replace").splitlines()[-3000:]:
+                for line in self._tail_file(auth_log, 3000):
                     if re.search(r"(failed|accepted|sudo|su\[|session)", line, re.IGNORECASE):
                         ts_match = re.match(r"^(\w+\s+\d+\s+[\d:]+)", line)
                         if ts_match:
@@ -4964,7 +4989,7 @@ class CyberGuardToolkit:
         syslog = Path("/var/log/syslog")
         if syslog.exists():
             try:
-                for line in syslog.read_text(errors="replace").splitlines()[-3000:]:
+                for line in self._tail_file(syslog, 3000):
                     if re.search(r"(error|warning|kernel|UFW)", line, re.IGNORECASE):
                         ts_match = re.match(r"^(\w+\s+\d+\s+[\d:]+)", line)
                         if ts_match:
@@ -5429,7 +5454,7 @@ class CyberGuardToolkit:
         auth_log = Path("/var/log/auth.log")
         if auth_log.exists():
             try:
-                lines = auth_log.read_text(errors="replace").splitlines()[-5000:]
+                lines = self._tail_file(auth_log, 5000)
                 error_count = sum(1 for l in lines if re.search(r"(error|fail|denied)", l, re.IGNORECASE))
                 UI.print_info(f"auth.log: {len(lines)} lines analyzed, {error_count} notable events")
             except PermissionError:
@@ -5437,7 +5462,7 @@ class CyberGuardToolkit:
         syslog = Path("/var/log/syslog")
         if syslog.exists():
             try:
-                lines = syslog.read_text(errors="replace").splitlines()[-5000:]
+                lines = self._tail_file(syslog, 5000)
                 error_count = sum(1 for l in lines if re.search(r"(error|warning)", l, re.IGNORECASE))
                 UI.print_info(f"syslog: {len(lines)} lines analyzed, {error_count} notable events")
             except PermissionError:
