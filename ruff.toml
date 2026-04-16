@@ -1,0 +1,18 @@
+target-version = "py311"
+line-length = 120
+
+[lint]
+select = ["E", "F", "W"]
+ignore = [
+    "E741",   # ambiguous variable name (legacy — l, O, I)
+    "F401",   # unused imports (legacy monolith has shared imports)
+    "F541",   # f-string without placeholders (cosmetic)
+    "F841",   # local variable assigned but never used (legacy)
+]
+
+[lint.per-file-ignores]
+"cyberguard_toolkit.py" = ["E501"]
+"cyberguard/**" = ["E501"]
+
+[format]
+quote-style = "double"
