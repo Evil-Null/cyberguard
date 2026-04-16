@@ -89,6 +89,6 @@ nmap  ·  whois  ·  searchsploit  ·  net-tools
 
 ## License
 
-Proprietary. All rights reserved.
+MIT License
 
 Made in Georgia.
