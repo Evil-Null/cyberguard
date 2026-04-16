@@ -29,7 +29,8 @@ import sys
 import tarfile
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -77,6 +78,18 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════
 # CONSTANTS
 # ═══════════════════════════════════════════════════════════════════════════
+
+_log = logging.getLogger("cyberguard")
+
+
+class Severity(StrEnum):
+    """Standardized severity levels for findings and vulnerabilities."""
+    CRITICAL = "CRITICAL"
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+    INFO = "INFO"
+
 
 VERSION = "1.0"
 APP_NAME = "CyberGuard Professional Security Toolkit"
@@ -185,20 +198,20 @@ KERNEL_SECURITY_PARAMS = {
 }
 
 SSH_SECURITY_PARAMS = {
-    "PermitRootLogin": {"expected": "no", "severity": "HIGH"},
-    "PasswordAuthentication": {"expected": "no", "severity": "HIGH"},
-    "PermitEmptyPasswords": {"expected": "no", "severity": "HIGH"},
-    "X11Forwarding": {"expected": "no", "severity": "MEDIUM"},
-    "MaxAuthTries": {"expected": "4", "severity": "MEDIUM", "compare": "lte"},
-    "Protocol": {"expected": "2", "severity": "HIGH"},
-    "IgnoreRhosts": {"expected": "yes", "severity": "MEDIUM"},
-    "HostbasedAuthentication": {"expected": "no", "severity": "MEDIUM"},
-    "LoginGraceTime": {"expected": "60", "severity": "LOW", "compare": "lte"},
-    "ClientAliveInterval": {"expected": "300", "severity": "LOW", "compare": "lte"},
-    "ClientAliveCountMax": {"expected": "3", "severity": "LOW", "compare": "lte"},
-    "AllowAgentForwarding": {"expected": "no", "severity": "LOW"},
-    "AllowTcpForwarding": {"expected": "no", "severity": "LOW"},
-    "UsePAM": {"expected": "yes", "severity": "MEDIUM"},
+    "PermitRootLogin": {"expected": "no", "severity": Severity.HIGH},
+    "PasswordAuthentication": {"expected": "no", "severity": Severity.HIGH},
+    "PermitEmptyPasswords": {"expected": "no", "severity": Severity.HIGH},
+    "X11Forwarding": {"expected": "no", "severity": Severity.MEDIUM},
+    "MaxAuthTries": {"expected": "4", "severity": Severity.MEDIUM, "compare": "lte"},
+    "Protocol": {"expected": "2", "severity": Severity.HIGH},
+    "IgnoreRhosts": {"expected": "yes", "severity": Severity.MEDIUM},
+    "HostbasedAuthentication": {"expected": "no", "severity": Severity.MEDIUM},
+    "LoginGraceTime": {"expected": "60", "severity": Severity.LOW, "compare": "lte"},
+    "ClientAliveInterval": {"expected": "300", "severity": Severity.LOW, "compare": "lte"},
+    "ClientAliveCountMax": {"expected": "3", "severity": Severity.LOW, "compare": "lte"},
+    "AllowAgentForwarding": {"expected": "no", "severity": Severity.LOW},
+    "AllowTcpForwarding": {"expected": "no", "severity": Severity.LOW},
+    "UsePAM": {"expected": "yes", "severity": Severity.MEDIUM},
 }
 
 MITRE_TECHNIQUES = {
@@ -520,7 +533,8 @@ class InputValidator:
         try:
             r = urlparse(url.strip())
             return all([r.scheme in ("http", "https"), r.netloc])
-        except Exception:
+        except Exception as e:
+            _log.debug("URL parse failed: %s", e)
             return False
 
     @staticmethod
@@ -843,12 +857,12 @@ class RiskScorer:
         score = 100.0
         deductions = []
         for f in findings:
-            sev = f.get("severity", "LOW")
-            if sev == "CRITICAL":
+            sev = f.get("severity", Severity.LOW)
+            if sev == Severity.CRITICAL:
                 d = 25.0
-            elif sev == "HIGH":
+            elif sev == Severity.HIGH:
                 d = 15.0
-            elif sev == "MEDIUM":
+            elif sev == Severity.MEDIUM:
                 d = 8.0
             else:
                 d = 3.0
@@ -1011,9 +1025,9 @@ class HTMLReportGenerator:
         if findings:
             body += '<h2>Findings</h2>'
             for f in findings:
-                sev = f.get("severity", "LOW").lower()
+                sev = f.get("severity", Severity.LOW).lower()
                 body += f'<div class="card {html_mod.escape(sev)}">'
-                body += f'<h3>{cls._severity_badge(f.get("severity", "LOW"))} {cls._esc(f.get("title", ""))}</h3>'
+                body += f'<h3>{cls._severity_badge(f.get("severity", Severity.LOW))} {cls._esc(f.get("title", ""))}</h3>'
                 body += f'<p>{cls._esc(f.get("description", ""))}</p>'
                 if f.get("recommendation"):
                     body += f'<div class="recommendation"><strong>Recommendation:</strong> {cls._esc(f["recommendation"])}</div>'
@@ -1066,10 +1080,10 @@ class HTMLReportGenerator:
 
         counts = {}
         for v in vulns:
-            s = v.get("severity", "LOW")
+            s = v.get("severity", Severity.LOW)
             counts[s] = counts.get(s, 0) + 1
         body += '<div class="summary-grid">'
-        for s in ["CRITICAL", "HIGH", "MEDIUM", "LOW"]:
+        for s in [Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW]:
             body += f'<div class="summary-item"><div class="value">{counts.get(s, 0)}</div>'
             body += f'<div class="label">{s}</div></div>'
         body += '</div>'
@@ -1079,7 +1093,7 @@ class HTMLReportGenerator:
             body += '<table><tr><th>ID</th><th>Severity</th><th>Description</th><th>Affected</th></tr>'
             for v in vulns:
                 body += f'<tr><td>{cls._esc(v.get("id", "N/A"))}</td>'
-                body += f'<td>{cls._severity_badge(v.get("severity", "LOW"))}</td>'
+                body += f'<td>{cls._severity_badge(v.get("severity", Severity.LOW))}</td>'
                 body += f'<td>{cls._esc(v.get("description", ""))}</td>'
                 body += f'<td>{cls._esc(v.get("affected", ""))}</td></tr>'
             body += '</table>'
@@ -1094,8 +1108,8 @@ class HTMLReportGenerator:
         body += f'<div class="summary-grid">'
         body += f'<div class="summary-item"><div class="value">{findings_count}</div><div class="label">Total Findings</div></div>'
 
-        crit = sum(1 for f in top_findings if f.get("severity") == "CRITICAL")
-        high = sum(1 for f in top_findings if f.get("severity") == "HIGH")
+        crit = sum(1 for f in top_findings if f.get("severity") == Severity.CRITICAL)
+        high = sum(1 for f in top_findings if f.get("severity") == Severity.HIGH)
         body += f'<div class="summary-item"><div class="value">{crit}</div><div class="label">Critical</div></div>'
         body += f'<div class="summary-item"><div class="value">{high}</div><div class="label">High</div></div>'
         body += '</div>'
@@ -1103,9 +1117,9 @@ class HTMLReportGenerator:
         if top_findings:
             body += '<h2>Top Findings</h2>'
             for f in top_findings[:10]:
-                sev = f.get("severity", "LOW").lower()
+                sev = f.get("severity", Severity.LOW).lower()
                 body += f'<div class="card {html_mod.escape(sev)}">'
-                body += f'{cls._severity_badge(f.get("severity", "LOW"))} <strong>{cls._esc(f.get("title", ""))}</strong>'
+                body += f'{cls._severity_badge(f.get("severity", Severity.LOW))} <strong>{cls._esc(f.get("title", ""))}</strong>'
                 body += f'<p>{cls._esc(f.get("description", ""))}</p></div>'
 
         if recommendations:
@@ -1235,7 +1249,8 @@ class AlertManager:
                 except OSError:
                     pass
             return Fernet(key)
-        except Exception:
+        except Exception as e:
+            self.config.logger.warning("Fernet key init failed: %s", e)
             return None
 
     def _encrypt_value(self, plaintext: str) -> str:
@@ -1247,7 +1262,8 @@ class AlertManager:
         if self._fernet and ciphertext:
             try:
                 return self._fernet.decrypt(ciphertext.encode()).decode()
-            except Exception:
+            except Exception as e:
+                self.config.logger.debug("Decrypt failed, returning raw: %s", e)
                 return ciphertext
         return ciphertext
 
@@ -1303,7 +1319,7 @@ class AlertManager:
         self.alerts_config["webhooks"] = webhooks
         self.save_config()
 
-    def send_alert(self, subject: str, message: str, severity: str = "INFO") -> None:
+    def send_alert(self, subject: str, message: str, severity: str = Severity.INFO) -> None:
         self.config.logger.info(f"Alert [{severity}]: {subject}")
         email_cfg = self.alerts_config.get("email", {})
         if email_cfg.get("enabled"):
@@ -1711,7 +1727,7 @@ class ComplianceChecker:
         }
         for f in findings:
             cat = f.get("nist_function", "Protect")
-            sev = f.get("severity", "LOW")
+            sev = f.get("severity", Severity.LOW)
             d = {"CRITICAL": 20, "HIGH": 12, "MEDIUM": 6, "LOW": 2}.get(sev, 2)
             if cat in functions:
                 functions[cat]["score"] = max(0, functions[cat]["score"] - d)
@@ -1734,10 +1750,10 @@ class ExecutiveSummary:
 
         severity_counts = {}
         for f in findings:
-            s = f.get("severity", "LOW")
+            s = f.get("severity", Severity.LOW)
             severity_counts[s] = severity_counts.get(s, 0) + 1
 
-        top = sorted(findings, key=lambda x: {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}.get(x.get("severity", "LOW"), 4))
+        top = sorted(findings, key=lambda x: {Severity.CRITICAL: 0, Severity.HIGH: 1, Severity.MEDIUM: 2, Severity.LOW: 3}.get(x.get("severity", Severity.LOW), 4))
 
         recommendations = []
         if severity_counts.get("CRITICAL", 0) > 0:
@@ -1869,7 +1885,7 @@ class RemediationTracker:
             if f.get("severity") in ("CRITICAL", "HIGH"):
                 self.add_finding(
                     title=f.get("title", "Unknown finding"),
-                    severity=f.get("severity", "HIGH"),
+                    severity=f.get("severity", Severity.HIGH),
                     description=f.get("description", ""),
                     recommendation=f.get("recommendation", ""),
                 )
@@ -2228,7 +2244,7 @@ class UI:
         table.add_column("Severity", style="white")
         table.add_column("Message", style="white")
         for e in events[:100]:
-            sev = e.get("severity", "INFO")
+            sev = e.get("severity", Severity.INFO)
             colors = {"CRITICAL": "red", "HIGH": "bright_red", "MEDIUM": "yellow",
                       "LOW": "green", "INFO": "blue"}
             color = colors.get(sev, "white")
@@ -2253,7 +2269,7 @@ class UI:
         table.add_column("Status", style="white")
         table.add_column("Due Date", style="dim")
         for item in items:
-            sev = item.get("severity", "LOW")
+            sev = item.get("severity", Severity.LOW)
             colors = {"CRITICAL": "red", "HIGH": "bright_red", "MEDIUM": "yellow", "LOW": "green"}
             color = colors.get(sev, "white")
             st = item.get("status", "open")
@@ -2489,14 +2505,16 @@ class CyberGuardToolkit:
                             sock.settimeout(2)
                             sock.send(b"HEAD / HTTP/1.0\r\n\r\n")
                             banner = sock.recv(256).decode("utf-8", errors="replace").strip()
-                        except Exception:
+                        except Exception as e:
+                            self.config.logger.debug("Banner grab failed for %s:%s: %s", target, port, e)
                             pass
                         results.append({
                             "port": port, "state": "open",
                             "service": service, "banner": banner,
                         })
                     sock.close()
-                except Exception:
+                except Exception as e:
+                    self.config.logger.debug("Port scan connect failed for %s:%s: %s", target, port, e)
                     pass
                 progress.advance(task)
 
@@ -2590,7 +2608,8 @@ class CyberGuardToolkit:
                 try:
                     answers = dns.resolver.resolve(domain, rtype)
                     records[rtype] = [str(r) for r in answers]
-                except Exception:
+                except Exception as e:
+                    self.config.logger.debug("DNS %s lookup failed: %s", rtype, e)
                     pass
                 progress.advance(task)
 
@@ -2610,12 +2629,13 @@ class CyberGuardToolkit:
                           BarColumn(), TextColumn("{task.percentage:>3.0f}%")) as progress:
                 task = progress.add_task("Enumerating subdomains", total=len(common_subs))
                 for sub in common_subs:
+                    full = f"{sub}.{domain}"
                     try:
-                        full = f"{sub}.{domain}"
                         answers = dns.resolver.resolve(full, "A")
                         ips = [str(r) for r in answers]
                         found_subs.append({"subdomain": full, "ips": ips})
-                    except Exception:
+                    except Exception as e:
+                        self.config.logger.debug("Subdomain %s failed: %s", full, e)
                         pass
                     progress.advance(task)
 
@@ -2640,7 +2660,7 @@ class CyberGuardToolkit:
             UI.print_subsection("UFW Status")
             console.print(f"\n{out}")
             if "inactive" in out.lower():
-                findings.append({"title": "UFW firewall is inactive", "severity": "HIGH",
+                findings.append({"title": "UFW firewall is inactive", "severity": Severity.HIGH,
                                  "recommendation": "Enable with: sudo ufw enable"})
                 self._add_finding("Firewall is inactive", "HIGH",
                                   "UFW firewall is not enabled",
@@ -2649,7 +2669,7 @@ class CyberGuardToolkit:
                 wide_rules = [l for l in out.splitlines() if "ALLOW" in l and "Anywhere" in l]
                 if wide_rules:
                     findings.append({"title": f"{len(wide_rules)} wide-open ALLOW rules",
-                                     "severity": "MEDIUM"})
+                                     "severity": Severity.MEDIUM})
         else:
             # Try iptables
             rc2, out2, _ = self.cmd.run(["iptables", "-L", "-n", "--line-numbers"], timeout=10)
@@ -2993,7 +3013,7 @@ class CyberGuardToolkit:
                 UI.print_warning(f"Non-standard SUID files: {len(unknown_suid)}")
                 for f in unknown_suid[:20]:
                     UI.print_finding("MEDIUM", f"Non-standard SUID: {f}")
-                    findings_list.append({"title": f"SUID: {f}", "severity": "MEDIUM"})
+                    findings_list.append({"title": f"SUID: {f}", "severity": Severity.MEDIUM})
 
         # World-writable files in /etc
         UI.print_subsection("World-Writable Files")
@@ -3355,23 +3375,24 @@ class CyberGuardToolkit:
                     # Check expiry
                     try:
                         not_after = datetime.strptime(cert["notAfter"], "%b %d %H:%M:%S %Y %Z")
-                        days_left = (not_after - datetime.utcnow()).days
+                        days_left = (not_after - datetime.now(timezone.utc).replace(tzinfo=None)).days
                         results["days_until_expiry"] = days_left
                         if days_left < 0:
-                            results["issues"].append({"severity": "CRITICAL",
+                            results["issues"].append({"severity": Severity.CRITICAL,
                                                        "title": "Certificate expired",
                                                        "details": f"Expired {abs(days_left)} days ago"})
                         elif days_left < 30:
-                            results["issues"].append({"severity": "HIGH",
+                            results["issues"].append({"severity": Severity.HIGH,
                                                        "title": "Certificate expiring soon",
                                                        "details": f"{days_left} days remaining"})
-                    except Exception:
+                    except Exception as e:
+                        self.config.logger.warning("SSL certificate expiry parse failed for %s:%s: %s", target, port, e)
                         pass
 
                     # Protocol version check
                     if version in ("SSLv2", "SSLv3", "TLSv1", "TLSv1.1"):
                         results["issues"].append({
-                            "severity": "HIGH",
+                            "severity": Severity.HIGH,
                             "title": f"Deprecated protocol: {version}",
                             "details": "Upgrade to TLSv1.2 or TLSv1.3",
                         })
@@ -3398,7 +3419,7 @@ class CyberGuardToolkit:
 
         except ssl.SSLCertVerificationError as e:
             UI.print_finding("HIGH", "SSL Certificate Verification Failed", str(e))
-            results["issues"].append({"severity": "HIGH", "title": "Cert verification failed"})
+            results["issues"].append({"severity": Severity.HIGH, "title": "Cert verification failed"})
         except Exception as e:
             UI.print_error(f"SSL connection failed: {e}")
             return
@@ -3593,7 +3614,7 @@ class CyberGuardToolkit:
         UI.print_subsection(f"Scan Summary: {target}")
         severity_counts = {}
         for v in all_vulns:
-            sev = v.get("severity", "INFO")
+            sev = v.get("severity", Severity.INFO)
             severity_counts[sev] = severity_counts.get(sev, 0) + 1
         for sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]:
             if sev in severity_counts:
@@ -3607,7 +3628,7 @@ class CyberGuardToolkit:
             UI.print_score_panel(score["score"], score["grade"], "Vulnerability Score")
             for v in all_vulns:
                 self._add_finding(
-                    v.get("description", "Unknown"), v.get("severity", "MEDIUM"),
+                    v.get("description", "Unknown"), v.get("severity", Severity.MEDIUM),
                     f"{v.get('id', 'N/A')}: {v.get('description', '')}",
                     v.get("recommendation", "Review and remediate"),
                     "Vulnerability", "Detect",
@@ -3656,7 +3677,8 @@ class CyberGuardToolkit:
                         open_ports.append((port, service, risk))
                 except (socket.timeout, ConnectionRefusedError, OSError):
                     pass
-        except Exception:
+        except Exception as e:
+            self.config.logger.debug("Quick port scan failed for %s: %s", host, e)
             pass
 
         if open_ports:
@@ -3665,15 +3687,15 @@ class CyberGuardToolkit:
                            [("Port", "red"), ("Service", "cyan"), ("Risk", "yellow")], rows)
             for port, service, risk in open_ports:
                 if port in (21, 23, 110, 143, 5900):
-                    vulns.append({"id": f"PORT-{port}", "severity": "HIGH",
+                    vulns.append({"id": f"PORT-{port}", "severity": Severity.HIGH,
                                   "description": f"Unencrypted service: {service} on port {port}",
                                   "affected": host, "recommendation": f"Disable or encrypt {service}"})
                 elif port in (445, 3389, 6379, 9200, 27017):
-                    vulns.append({"id": f"PORT-{port}", "severity": "HIGH",
+                    vulns.append({"id": f"PORT-{port}", "severity": Severity.HIGH,
                                   "description": f"Risky service exposed: {service} on port {port}",
                                   "affected": host, "recommendation": f"Restrict access to {service}"})
                 else:
-                    vulns.append({"id": f"PORT-{port}", "severity": "MEDIUM",
+                    vulns.append({"id": f"PORT-{port}", "severity": Severity.MEDIUM,
                                   "description": f"Service exposed: {service} on port {port}",
                                   "affected": host, "recommendation": f"Review {service} configuration"})
         else:
@@ -3738,7 +3760,7 @@ class CyberGuardToolkit:
                         total_exploits += len(exploits)
                         for e in exploits[:3]:
                             vulns.append({"id": f"EXPLOIT-{term[:8].upper()}",
-                                          "severity": "HIGH",
+                                          "severity": Severity.HIGH,
                                           "description": f"Known exploit: {e.get('Title', '')[:60]}",
                                           "affected": term,
                                           "recommendation": "Patch or mitigate vulnerable software"})
@@ -3775,7 +3797,7 @@ class CyberGuardToolkit:
                     UI.print_table("Services on all interfaces (0.0.0.0)",
                                    [("Address", "yellow")], rows)
                     for addr in wide_open:
-                        vulns.append({"id": "SVC-BIND-ALL", "severity": "MEDIUM",
+                        vulns.append({"id": "SVC-BIND-ALL", "severity": Severity.MEDIUM,
                                       "description": f"Service bound to all interfaces: {addr}",
                                       "affected": host,
                                       "recommendation": "Bind service to specific interface"})
@@ -3796,25 +3818,27 @@ class CyberGuardToolkit:
                     cert = ssock.getpeercert()
                     version = ssock.version()
                     if version in ("SSLv2", "SSLv3", "TLSv1", "TLSv1.1"):
-                        vulns.append({"id": "SSL-001", "severity": "HIGH",
+                        vulns.append({"id": "SSL-001", "severity": Severity.HIGH,
                                       "description": f"Deprecated TLS: {version}",
                                       "affected": target})
                     try:
                         not_after = datetime.strptime(cert["notAfter"], "%b %d %H:%M:%S %Y %Z")
-                        days = (not_after - datetime.utcnow()).days
+                        days = (not_after - datetime.now(timezone.utc).replace(tzinfo=None)).days
                         if days < 0:
-                            vulns.append({"id": "SSL-002", "severity": "CRITICAL",
+                            vulns.append({"id": "SSL-002", "severity": Severity.CRITICAL,
                                           "description": "Expired certificate", "affected": target})
                         elif days < 30:
-                            vulns.append({"id": "SSL-003", "severity": "HIGH",
+                            vulns.append({"id": "SSL-003", "severity": Severity.HIGH,
                                           "description": f"Certificate expires in {days} days",
                                           "affected": target})
-                    except Exception:
+                    except Exception as e:
+                        self.config.logger.warning("SSL auto-analysis certificate parse failed for %s: %s", target, e)
                         pass
         except ssl.SSLCertVerificationError:
-            vulns.append({"id": "SSL-004", "severity": "HIGH",
+            vulns.append({"id": "SSL-004", "severity": Severity.HIGH,
                           "description": "Certificate verification failed", "affected": target})
-        except Exception:
+        except Exception as e:
+            self.config.logger.debug("SSL auto-analysis failed for %s: %s", target, e)
             pass
 
     def _web_headers_auto(self, url: str, vulns: list):
@@ -3826,9 +3850,10 @@ class CyberGuardToolkit:
             for h in ["strict-transport-security", "content-security-policy",
                        "x-content-type-options", "x-frame-options"]:
                 if h not in headers:
-                    vulns.append({"id": f"HDR-{h[:6].upper()}", "severity": "MEDIUM",
+                    vulns.append({"id": f"HDR-{h[:6].upper()}", "severity": Severity.MEDIUM,
                                   "description": f"Missing: {h}", "affected": url})
-        except Exception:
+        except Exception as e:
+            self.config.logger.debug("Web headers fetch failed for %s: %s", url, e)
             pass
 
     # ═══════════════════════════════════════════════════════════════════
@@ -4200,7 +4225,7 @@ class CyberGuardToolkit:
                             events.append({
                                 "timestamp": ts_match.group(1),
                                 "source": "syslog",
-                                "severity": "MEDIUM",
+                                "severity": Severity.MEDIUM,
                                 "message": line[len(ts_match.group(1)):].strip()[:100],
                             })
             except PermissionError:
@@ -4601,13 +4626,15 @@ class CyberGuardToolkit:
                         data = self.threat_intel.vt_ip_reputation(ip)
                         stats = data.get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
                         result["vt_malicious"] = stats.get("malicious", 0)
-                    except Exception:
+                    except Exception as e:
+                        self.config.logger.debug("VirusTotal enrichment failed for %s: %s", ip, e)
                         pass
                 if self.config.has_api_key("abuseipdb"):
                     try:
                         data = self.threat_intel.abuseipdb_check(ip)
                         result["abuse_score"] = data.get("data", {}).get("abuseConfidenceScore", 0)
-                    except Exception:
+                    except Exception as e:
+                        self.config.logger.debug("AbuseIPDB enrichment failed for %s: %s", ip, e)
                         pass
                 results.append(result)
                 progress.advance(task)
@@ -4757,7 +4784,7 @@ class CyberGuardToolkit:
                     events.append({
                         "timestamp": parts[0][:19],
                         "source": "filesystem",
-                        "severity": "MEDIUM",
+                        "severity": Severity.MEDIUM,
                         "message": f"Modified: {parts[1]}",
                     })
 
@@ -4771,7 +4798,7 @@ class CyberGuardToolkit:
                         events.append({
                             "timestamp": ts_match.group(1),
                             "source": "auth.log",
-                            "severity": "INFO" if "accepted" in line.lower() else "HIGH",
+                            "severity": Severity.INFO if "accepted" in line.lower() else "HIGH",
                             "message": line[len(ts_match.group(1)):].strip()[:100],
                         })
             except PermissionError:
@@ -4861,7 +4888,8 @@ class CyberGuardToolkit:
                     md5.update(chunk)
             results["analyses"]["md5"] = md5.hexdigest()
             UI.print_info(f"MD5: {md5.hexdigest()}")
-        except Exception:
+        except Exception as e:
+            self.config.logger.warning("MD5 hash calculation failed for %s: %s", fp, e)
             pass
 
         # strings (first 50)
@@ -4926,7 +4954,7 @@ class CyberGuardToolkit:
                             events.append({
                                 "timestamp": ts_match.group(1),
                                 "source": "auth",
-                                "severity": "HIGH" if "failed" in line.lower() else "INFO",
+                                "severity": Severity.HIGH if "failed" in line.lower() else "INFO",
                                 "message": line[len(ts_match.group(1)):].strip()[:120],
                             })
             except PermissionError:
@@ -4943,7 +4971,7 @@ class CyberGuardToolkit:
                             events.append({
                                 "timestamp": ts_match.group(1),
                                 "source": "syslog",
-                                "severity": "MEDIUM",
+                                "severity": Severity.MEDIUM,
                                 "message": line[len(ts_match.group(1)):].strip()[:120],
                             })
             except PermissionError:
@@ -4958,7 +4986,7 @@ class CyberGuardToolkit:
                     events.append({
                         "timestamp": datetime.now().strftime("%b %d %H:%M:%S"),
                         "source": "network",
-                        "severity": "INFO",
+                        "severity": Severity.INFO,
                         "message": f"Active: {parts[3]} → {parts[4]}",
                     })
 
@@ -5029,7 +5057,7 @@ class CyberGuardToolkit:
         UI.print_info(f"Total findings: {len(self.findings)}")
         severity_counts = {}
         for f in self.findings:
-            s = f.get("severity", "LOW")
+            s = f.get("severity", Severity.LOW)
             severity_counts[s] = severity_counts.get(s, 0) + 1
         UI.print_key_value(severity_counts, "Findings by Severity")
 
@@ -5342,7 +5370,7 @@ class CyberGuardToolkit:
         if self.findings:
             severity_counts = {}
             for f in self.findings:
-                s = f.get("severity", "LOW")
+                s = f.get("severity", Severity.LOW)
                 severity_counts[s] = severity_counts.get(s, 0) + 1
             UI.print_key_value(severity_counts, "Findings by Severity")
 
@@ -5369,7 +5397,7 @@ class CyberGuardToolkit:
         self.config.save_session_history(workflow_name, f"{len(self.findings)} findings")
 
         if self.alert_mgr.is_configured():
-            critical = sum(1 for f in self.findings if f.get("severity") == "CRITICAL")
+            critical = sum(1 for f in self.findings if f.get("severity") == Severity.CRITICAL)
             if critical > 0:
                 self.alert_mgr.send_alert(
                     f"{workflow_name}: {critical} CRITICAL findings",
